@@ -1,0 +1,5 @@
+{
+  "name": "GINGER AI",
+  "description": "Professional dashboard for tracking and managing international agricultural commodity buyers, featuring an AI-powered Data Extraction and Normalization Engine for parsing unstructured contact information into standardized JSON payloads.",
+  "requestFramePermissions": []
+}
