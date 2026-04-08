@@ -153,6 +153,12 @@ export default function App() {
   const [currentContact, setCurrentContact] = useState<Contact | null>(null)
   const [isExtracting, setIsExtracting] = useState(false)
   const [extractedJson, setExtractedJson] = useState<any>(null)
+  const [extractionCorrections, setExtractionCorrections] = useState<{input: string, output: any}[]>(() => {
+    const saved = localStorage.getItem('ginger_extraction_corrections');
+    return saved ? JSON.parse(saved) : [];
+  })
+  const [isReviewingExtraction, setIsReviewingExtraction] = useState(false)
+  const [editedExtractedJson, setEditedExtractedJson] = useState<string>("")
   const [newContact, setNewContact] = useState<Omit<Contact, 'id' | 'lastInteraction'>>({
     name: "",
     email: "",
@@ -1046,14 +1052,20 @@ export default function App() {
     setIsExtracting(true);
     setExtractionError("");
     setExtractedJson(null);
+    setIsReviewingExtraction(false);
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
+      const fewShotExamples = extractionCorrections.length > 0 
+        ? `\n# FEW-SHOT EXAMPLES (LEARNED FROM USER FEEDBACK)\n${extractionCorrections.slice(-3).map(c => `Input: ${c.input}\nOutput: ${JSON.stringify(c.output)}`).join('\n\n')}`
+        : "";
+
       const systemInstruction = `You are a highly precise Data Extraction and Normalization Engine. Your purpose is to parse unstructured text, identify customer contact information, map it to standardized global platforms, and format the output for a downstream database.
 
 # TASK
 Extract customer contact data from the user's input and structure it into a strict JSON payload.
+${fewShotExamples}
 
 # CONSTRAINTS & RULES
 1. **Platform Standardization**: Map extracted handles strictly to the following approved keys: 
@@ -1092,6 +1104,7 @@ Extract customer contact data from the user's input and structure it into a stri
 
       const result = JSON.parse(response.text);
       setExtractedJson(result);
+      setEditedExtractedJson(JSON.stringify(result, null, 2));
     } catch (error) {
       console.error("Extraction error:", error);
       setExtractionError("Failed to extract data. Ensure the input contains valid contact information.");
@@ -1199,7 +1212,22 @@ Extract customer contact data from the user's input and structure it into a stri
     setUnstructuredText("");
     setExtractedJson(null);
     setExtractionError("");
+    setIsReviewingExtraction(false);
   }
+
+  const saveCorrection = () => {
+    try {
+      const corrected = JSON.parse(editedExtractedJson);
+      const newCorrection = { input: unstructuredText, output: corrected };
+      const updatedCorrections = [...extractionCorrections, newCorrection].slice(-10); // Keep last 10
+      setExtractionCorrections(updatedCorrections);
+      localStorage.setItem('ginger_extraction_corrections', JSON.stringify(updatedCorrections));
+      setExtractedJson(corrected);
+      setIsReviewingExtraction(false);
+    } catch (e) {
+      alert("Invalid JSON format. Please correct it before saving.");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -3002,21 +3030,72 @@ Extract customer contact data from the user's input and structure it into a stri
                     </div>
                   ) : extractedJson ? (
                     <div className="h-full flex flex-col">
-                      <div className="flex-1 bg-slate-900 rounded-lg p-4 overflow-auto custom-scrollbar">
-                        <pre className="text-emerald-400 font-mono text-xs leading-relaxed">
-                          {JSON.stringify(extractedJson, null, 2)}
-                        </pre>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-4">
-                        <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                          <div className="text-[10px] uppercase font-bold text-emerald-700 mb-1">Contacts Found</div>
-                          <div className="text-2xl font-bold text-emerald-900">{extractedJson.customer_contacts?.length || 0}</div>
+                      {isReviewingExtraction ? (
+                        <div className="flex-1 flex flex-col gap-4">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-semibold text-slate-700">Edit Extracted Data</h4>
+                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                              <Edit2 className="h-3 w-3 mr-1" /> Correction Mode
+                            </Badge>
+                          </div>
+                          <textarea
+                            className="flex-1 w-full p-4 font-mono text-xs bg-slate-900 text-emerald-400 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none custom-scrollbar"
+                            value={editedExtractedJson}
+                            onChange={(e) => setEditedExtractedJson(e.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <Button 
+                              variant="outline" 
+                              className="flex-1"
+                              onClick={() => setIsReviewingExtraction(false)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button 
+                              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                              onClick={saveCorrection}
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2" />
+                              Save & Train AI
+                            </Button>
+                          </div>
                         </div>
-                        <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-                          <div className="text-[10px] uppercase font-bold text-blue-700 mb-1">Emails Extracted</div>
-                          <div className="text-2xl font-bold text-blue-900">{extractedJson.emails?.length || 0}</div>
-                        </div>
-                      </div>
+                      ) : (
+                        <>
+                          <div className="flex-1 bg-slate-900 rounded-lg p-4 overflow-auto custom-scrollbar relative group">
+                            <pre className="text-emerald-400 font-mono text-xs leading-relaxed">
+                              {JSON.stringify(extractedJson, null, 2)}
+                            </pre>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-slate-300 hover:text-white"
+                              onClick={() => setIsReviewingExtraction(true)}
+                            >
+                              <Edit2 className="h-3.5 w-3.5 mr-2" />
+                              Correct Data
+                            </Button>
+                          </div>
+                          <div className="mt-4 grid grid-cols-2 gap-4">
+                            <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
+                              <div className="text-[10px] uppercase font-bold text-emerald-700 mb-1">Contacts Found</div>
+                              <div className="text-2xl font-bold text-emerald-900">{extractedJson.customer_contacts?.length || 0}</div>
+                            </div>
+                            <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+                              <div className="text-[10px] uppercase font-bold text-blue-700 mb-1">Emails Extracted</div>
+                              <div className="text-2xl font-bold text-blue-900">{extractedJson.emails?.length || 0}</div>
+                            </div>
+                          </div>
+                          {extractionCorrections.length > 0 && (
+                            <div className="mt-4 p-2 bg-slate-50 rounded border border-slate-200 flex items-center gap-2">
+                              <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+                              <span className="text-[10px] text-slate-500 font-medium">
+                                AI is learning from {extractionCorrections.length} previous corrections.
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center p-8 bg-slate-50 rounded-lg border border-dashed border-slate-300">
