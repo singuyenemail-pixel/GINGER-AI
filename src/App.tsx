@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from 'recharts'
 import { Tooltip } from "./components/ui/tooltip"
 import { Select } from "./components/ui/select"
+import ReactMarkdown from 'react-markdown'
 import { generateMockLeads, type Lead } from "./lib/mockData"
 import { performGingerMarketResearch, type GingerMarketResearchResult } from "./services/osintService"
 
@@ -46,6 +47,8 @@ const PERMISSIONS = {
   [ROLES.SALES_REP]: ['CAN_VIEW_DASHBOARD', 'CAN_CONTACT_WHATSAPP']
 } as const;
 
+import { translations, Language } from "./lib/translations";
+
 export interface Contact {
   id: string;
   name: string;
@@ -71,13 +74,24 @@ interface DSAR {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'contacts' | 'extractor' | 'osint' | 'privacy'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'contacts' | 'extractor' | 'osint' | 'privacy' | 'marketHub'>('dashboard')
+  const [language, setLanguage] = useState<Language>('en')
+  const t = (key: keyof typeof translations['en']) => translations[language][key] || translations['en'][key]
+  
+  const [marketLogs, setMarketLogs] = useState("")
+  const [priceIntelligence, setPriceIntelligence] = useState<{
+    priceBar: { price: string; currency: string };
+    dateBar: { timestamp: string; source: string };
+    bottlenecks: string;
+    payload: any;
+  } | null>(null)
+  const [isExtractingPrice, setIsExtractingPrice] = useState(false)
   const [dsars, setDsars] = useState<DSAR[]>([
     { id: 'dsar-1', email: 'sarah.jenkins@mccormick.com', type: 'Erasure', status: 'Pending', requestDate: new Date().toISOString() },
     { id: 'dsar-2', email: 'chen.wei@nedspice.com', type: 'Access', status: 'Completed', requestDate: new Date(Date.now() - 86400000 * 2).toISOString() }
   ])
   const [unstructuredText, setUnstructuredText] = useState("")
-  const [osintResults, setOsintResults] = useState<GingerMarketResearchResult[]>([])
+  const [osintResults, setOsintResults] = useState<GingerMarketResearchResult | null>(null)
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [isPerformingOsint, setIsPerformingOsint] = useState(false)
   const [extractionError, setExtractionError] = useState("")
@@ -205,6 +219,21 @@ export default function App() {
   const handleBatchEmail = () => {
     setIsBatchEmailModalOpen(true);
   }
+
+  const handleBulkDelete = () => {
+    if (selectedLeads.length === 0) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedLeads.length} selected contacts?`)) {
+      setLeads(prev => prev.filter(lead => !selectedLeads.includes(lead.id)));
+      setSelectedLeads([]);
+    }
+  };
+
+  const handleDeleteLead = (leadId: number) => {
+    if (window.confirm("Are you sure you want to delete this lead?")) {
+      setLeads(prev => prev.filter(l => l.id !== leadId));
+      setSelectedLeads(prev => prev.filter(id => id !== leadId));
+    }
+  };
 
   const insertPlaceholder = (placeholder: string) => {
     const quill = quillRef.current?.getEditor();
@@ -402,6 +431,17 @@ export default function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: contact.email })
           });
+          
+          if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+          }
+          
+          const contentType = response.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) {
+            const body = await response.text();
+            throw new Error(`Expected JSON but got ${contentType}. Body starts with: ${body.substring(0, 50)}`);
+          }
+
           const data = await response.json();
 
           if (!data.valid) {
@@ -432,6 +472,17 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email })
       });
+      
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const body = await response.text();
+        throw new Error(`Expected JSON but got ${contentType}. Body starts with: ${body.substring(0, 50)}`);
+      }
+
       const data = await response.json();
       
       setContacts(prev => prev.map(c => c.id === contactId ? { 
@@ -529,6 +580,17 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email })
       });
+      
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const body = await response.text();
+        throw new Error(`Expected JSON but got ${contentType}. Body starts with: ${body.substring(0, 50)}`);
+      }
+
       const data = await response.json();
       
       setLeads(prev => prev.map(l => l.id === leadId ? { 
@@ -733,11 +795,12 @@ export default function App() {
   const uniqueContactCategories = ["All", ...Array.from(new Set(contacts.map(c => c.category))).sort()]
 
   const validateEmail = (email: string) => {
-    if (!email) {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
       setEmailError("Email is required");
       return false;
     }
-    if (!validator.isEmail(email)) {
+    if (!validator.isEmail(trimmedEmail)) {
       setEmailError("Please enter a valid email address (e.g., user@domain.com)");
       return false;
     }
@@ -768,6 +831,9 @@ export default function App() {
     const leadId = Date.now();
     const leadToAdd: Lead = {
       ...newLead,
+      email: newLead.email.trim(),
+      company: newLead.company.trim(),
+      contact: newLead.contact.trim(),
       id: leadId,
       lastContact: new Date().toISOString().split('T')[0],
       collectionDate: new Date().toISOString(),
@@ -1047,6 +1113,91 @@ export default function App() {
     window.open(`https://www.linkedin.com/search/results/people/?keywords=${query}`, '_blank');
   }
 
+  const handleExtractPrice = async () => {
+    if (!marketLogs.trim()) return;
+    setIsExtractingPrice(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const prompt = `You are an expert OSINT (Open Source Intelligence) Research Assistant specialized in deterministic Market Intelligence Extraction. Your objective is to conduct comprehensive data analysis from public and provided logs while strictly adhering to privacy and security boundaries.
+
+# CONSTRAINTS
+- Zero-Credential Policy: NEVER ask for, store, or attempt to use the user's passwords, session cookies, or personal login credentials.
+- Anti-Hallucination: DO NOT guess or fabricate content located behind paywalls, private groups, or login screens.
+- Passive Analysis Only: You are strictly prohibited from attempting to post, interact, or authenticate on behalf of the user. Elegant handling of authentication roadblocks is managed via Human-in-the-Loop (HITL) alerts.
+
+# TASK
+Your precise function is to parse provided social media and messaging data logs (Facebook, Zalo, WhatsApp, Telegram, Instagram) to extract real-time pricing information for the commodity "Ginger".
+
+1. Scan the provided text context for mentions of Ginger and associated numeric price values.
+2. Extract the Price, Currency, Source Platform, and Timestamp.
+3. Boundary Detection: Identify if the logs mention restricted access points (e.g., "Join this private group for price", WhatsApp invite links).
+4. Structure the data into the mandatory output sections.
+
+# OUTPUT FORMAT
+Your output must contain strictly three sections, formatted exactly as follows:
+
+### 1. Market Price Bar
+- Current Extracted Price: [Value or NULL]
+- Currency: [Value or NULL]
+
+### 2. Checking Price Date Bar
+- Extraction Timestamp: [Source Date/Time or NULL]
+- Platform Source: [Facebook | Zalo | WhatsApp | Telegram | Instagram | NULL]
+
+### 3. ⚠️ [AUTH_REQUIRED] Bottlenecks (HITL Alerts)
+- Bottleneck: [Description of any private group/link mentioned or NULL]
+- Manual Action: [Step-by-step for the user to investigate the bottleneck using their own account or NULL]
+
+### 4. Exchange Monitor Payload
+\`\`\`json
+{
+  "commodity": "Ginger",
+  "true_price_extracted": "[Value or NULL]",
+  "currency": "[Value or NULL]",
+  "date_verified": "[Timestamp or NULL]",
+  "data_source_platform": "[Platform or NULL]",
+  "bottlenecks_detected": "[Description or NULL]",
+  "status": "[SUCCESS | NO_DATA_FOUND | AUTH_NEEDED]"
+}
+\`\`\`
+
+# LOGS TO PARSE:
+${marketLogs}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+
+      const text = response.text || "";
+      
+      const priceMatch = text.match(/- Current Extracted Price:\s*(.*)/);
+      const currencyMatch = text.match(/- Currency:\s*(.*)/);
+      const timestampMatch = text.match(/- Extraction Timestamp:\s*(.*)/);
+      const platformMatch = text.match(/- Platform Source:\s*(.*)/);
+      const bottleneckMatch = text.match(/### 3\. ⚠️ \[AUTH_REQUIRED\] Bottlenecks \(HITL Alerts\)([\s\S]*?)### 4\./);
+      const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+
+      setPriceIntelligence({
+        priceBar: { 
+          price: priceMatch ? priceMatch[1].trim() : "NULL", 
+          currency: currencyMatch ? currencyMatch[1].trim() : "NULL" 
+        },
+        dateBar: { 
+          timestamp: timestampMatch ? timestampMatch[1].trim() : "NULL", 
+          source: platformMatch ? platformMatch[1].trim() : "NULL" 
+        },
+        bottlenecks: bottleneckMatch ? bottleneckMatch[1].trim() : "None detected",
+        payload: jsonMatch ? JSON.parse(jsonMatch[1]) : null
+      });
+
+    } catch (error) {
+      console.error("Price extraction failed:", error);
+    } finally {
+      setIsExtractingPrice(false);
+    }
+  }
+
   const handleExtract = async () => {
     if (!unstructuredText.trim()) return;
     setIsExtracting(true);
@@ -1248,7 +1399,7 @@ ${fewShotExamples}
             className={activeTab === 'dashboard' ? 'bg-emerald-50 text-emerald-700' : ''}
           >
             <LayoutDashboard className="h-4 w-4 mr-2" />
-            Market Overview
+            {t('dashboard')}
           </Button>
           <Button 
             variant={activeTab === 'contacts' ? 'secondary' : 'ghost'} 
@@ -1257,7 +1408,7 @@ ${fewShotExamples}
             className={activeTab === 'contacts' ? 'bg-emerald-50 text-emerald-700' : ''}
           >
             <ContactIcon className="h-4 w-4 mr-2" />
-            Contacts
+            {t('contacts')}
           </Button>
           <Button 
             variant={activeTab === 'extractor' ? 'secondary' : 'ghost'} 
@@ -1266,7 +1417,7 @@ ${fewShotExamples}
             className={activeTab === 'extractor' ? 'bg-emerald-50 text-emerald-700' : ''}
           >
             <SearchCode className="h-4 w-4 mr-2" />
-            Data Extractor
+            {t('extractor')}
           </Button>
           <Button 
             variant={activeTab === 'osint' ? 'secondary' : 'ghost'} 
@@ -1275,7 +1426,7 @@ ${fewShotExamples}
             className={activeTab === 'osint' ? 'bg-emerald-50 text-emerald-700' : ''}
           >
             <Sparkles className="h-4 w-4 mr-2" />
-            OSINT Research
+            {t('osint')}
           </Button>
           <Button 
             variant={activeTab === 'privacy' ? 'secondary' : 'ghost'} 
@@ -1284,28 +1435,48 @@ ${fewShotExamples}
             className={activeTab === 'privacy' ? 'bg-emerald-50 text-emerald-700' : ''}
           >
             <ShieldCheck className="h-4 w-4 mr-2" />
-            Privacy & GDPR
+            {t('privacy')}
+          </Button>
+          <Button 
+            variant={activeTab === 'marketHub' ? 'secondary' : 'ghost'} 
+            size="sm" 
+            onClick={() => setActiveTab('marketHub')}
+            className={activeTab === 'marketHub' ? 'bg-emerald-50 text-emerald-700' : ''}
+          >
+            <TrendingUp className="h-4 w-4 mr-2" />
+            {t('marketHub')}
           </Button>
         </nav>
 
         <div className="ml-auto flex items-center gap-4">
           <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full">
+            <Globe className="h-3.5 w-3.5 text-slate-500" />
+            <Select 
+              value={language} 
+              onChange={(e) => setLanguage(e.target.value as Language)}
+              className="h-6 text-[10px] border-none bg-transparent focus:ring-0 p-0 w-16"
+            >
+              <option value="en">EN</option>
+              <option value="vi">VI</option>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full">
             <UserCircle className="h-4 w-4 text-slate-500" />
-            <span className="text-xs font-medium text-slate-600">Role:</span>
+            <span className="text-xs font-medium text-slate-600">{t('role')}:</span>
             <Select 
               value={userRole} 
               onChange={(e) => setUserRole(e.target.value as Role)}
               className="h-6 text-[10px] border-none bg-transparent focus:ring-0 p-0 w-24"
             >
-              <option value={ROLES.ADMIN}>Administrator</option>
-              <option value={ROLES.SALES_REP}>Sales Rep</option>
+              <option value={ROLES.ADMIN}>{t('admin')}</option>
+              <option value={ROLES.SALES_REP}>{t('salesRep')}</option>
             </Select>
           </div>
           <div className="relative w-72">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
             <Input
               type="search"
-              placeholder="Search by name, company, email, or location..."
+              placeholder={t('searchPlaceholder')}
               className="w-full bg-slate-100 pl-9 border-none focus-visible:ring-emerald-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -1317,7 +1488,7 @@ ${fewShotExamples}
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
               onClick={() => setIsAddModalOpen(true)}
             >
-              <Plus className="mr-2 h-4 w-4" /> Add Lead
+              <Plus className="mr-2 h-4 w-4" /> {t('addLead')}
             </Button>
           )}
         </div>
@@ -1328,8 +1499,8 @@ ${fewShotExamples}
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <Card className="w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
             <CardHeader className="relative">
-              <CardTitle>Add New Global Lead</CardTitle>
-              <CardDescription>Enter the details of the new ginger buyer.</CardDescription>
+              <CardTitle>{t('addGlobalLead')}</CardTitle>
+              <CardDescription>{t('enterLeadDetails')}</CardDescription>
               <Button 
                 variant="ghost" 
                 size="icon" 
@@ -1462,9 +1633,9 @@ ${fewShotExamples}
             <CardHeader className="bg-blue-600 text-white rounded-t-xl">
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-xl">Batch Email Composer</CardTitle>
+                  <CardTitle className="text-xl">{t('batchEmailComposer')}</CardTitle>
                   <CardDescription className="text-blue-100">
-                    Generating personalized letters for {selectedLeads.length} buyers.
+                    {t('batchEmailDesc').replace('{count}', selectedLeads.length.toString())}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-4">
@@ -1666,10 +1837,10 @@ ${fewShotExamples}
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-xl flex items-center gap-2">
-                    <Sparkles className="h-5 w-5" /> AI Follow-up Generator
+                    <Sparkles className="h-5 w-5" /> {t('aiFollowUpGen')}
                   </CardTitle>
                   <CardDescription className="text-emerald-100">
-                    Personalized outreach for {selectedLeadForFollowUp?.company}
+                    {t('aiFollowUpDesc').replace('{company}', selectedLeadForFollowUp?.company || '')}
                   </CardDescription>
                 </div>
                 <Button 
@@ -1732,8 +1903,8 @@ ${fewShotExamples}
           <Card className="w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-300">
             <CardHeader className="flex flex-row items-center justify-between border-b pb-4">
               <div>
-                <CardTitle className="text-xl">Add New Contact</CardTitle>
-                <CardDescription>Save a new buyer or supplier to your directory.</CardDescription>
+                <CardTitle className="text-xl">{t('addNewContact')}</CardTitle>
+                <CardDescription>{t('saveContactDesc')}</CardDescription>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setIsAddContactModalOpen(false)} className="h-8 w-8 p-0">
                 <X className="h-4 w-4" />
@@ -1816,8 +1987,8 @@ ${fewShotExamples}
           <Card className="w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-300">
             <CardHeader className="flex flex-row items-center justify-between border-b pb-4">
               <div>
-                <CardTitle className="text-xl">Quick Add</CardTitle>
-                <CardDescription>Essential details only.</CardDescription>
+                <CardTitle className="text-xl">{t('quickAdd')}</CardTitle>
+                <CardDescription>{t('quickAddDesc')}</CardDescription>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setIsQuickAddModalOpen(false)} className="h-8 w-8 p-0">
                 <X className="h-4 w-4" />
@@ -1874,8 +2045,8 @@ ${fewShotExamples}
           <Card className="w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-300">
             <CardHeader className="flex flex-row items-center justify-between border-b pb-4">
               <div>
-                <CardTitle className="text-xl">Edit Contact</CardTitle>
-                <CardDescription>Update details for {currentContact.name}.</CardDescription>
+                <CardTitle className="text-xl">{t('editContact')}</CardTitle>
+                <CardDescription>{t('editContactDesc').replace('{name}', currentContact.name)}</CardDescription>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setIsEditContactModalOpen(false)} className="h-8 w-8 p-0">
                 <X className="h-4 w-4" />
@@ -1953,8 +2124,8 @@ ${fewShotExamples}
             {/* Dashboard Header */}
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Ginger Market Overview</h1>
-            <p className="text-slate-500">Global buyer intelligence and market trends.</p>
+            <h1 className="text-2xl font-bold tracking-tight">{t('marketOverview')}</h1>
+            <p className="text-slate-500">{t('marketSubtitle')}</p>
             {enrichmentStatus && (
               <div className={`mt-2 flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full w-fit animate-in slide-in-from-left-2 duration-300 ${
                 enrichmentStatus.includes("failed") ? "bg-red-50 text-red-600" : "bg-purple-50 text-purple-600"
@@ -1975,7 +2146,7 @@ ${fewShotExamples}
                 className="bg-white hover:bg-slate-50 border-slate-200 text-slate-700 shadow-sm"
               >
                 <RefreshCw className={`h-4 w-4 mr-2 ${isEnriching ? 'animate-spin' : ''}`} />
-                Refresh Research
+                {t('refreshResearch')}
               </Button>
               {selectedLeads.length > 0 && (
                 <>
@@ -2071,7 +2242,7 @@ ${fewShotExamples}
               <ShoppingBag className="h-12 w-12 text-emerald-600" />
             </div>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Active Buyers</CardTitle>
+              <CardTitle className="text-sm font-medium">{t('activeLeads')}</CardTitle>
               <Users className="h-4 w-4 text-slate-500" />
             </CardHeader>
             <CardContent>
@@ -2086,7 +2257,7 @@ ${fewShotExamples}
               <Activity className="h-12 w-12 text-blue-600" />
             </div>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Global Demand Volume</CardTitle>
+              <CardTitle className="text-sm font-medium">{t('globalDemand')}</CardTitle>
               <Activity className="h-4 w-4 text-slate-500" />
             </CardHeader>
             <CardContent>
@@ -2103,7 +2274,7 @@ ${fewShotExamples}
               <DollarSign className="h-12 w-12 text-amber-600" />
             </div>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Avg. Market Price</CardTitle>
+              <CardTitle className="text-sm font-medium">{t('avgPrice')}</CardTitle>
               <DollarSign className="h-4 w-4 text-slate-500" />
             </CardHeader>
             <CardContent>
@@ -2115,13 +2286,13 @@ ${fewShotExamples}
           </Card>
           <Card className="bg-emerald-900 text-white border-none shadow-lg shadow-emerald-200/50">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-emerald-100">GINGER AI Status</CardTitle>
+              <CardTitle className="text-sm font-medium text-emerald-100">{t('aiStatus')}</CardTitle>
               <Sparkles className="h-4 w-4 text-emerald-400 animate-pulse" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">Active</div>
               <p className="text-xs text-emerald-300 mt-1">
-                Monitoring 124 global trade ports
+                {t('monitoringPorts')}
               </p>
             </CardContent>
           </Card>
@@ -2132,8 +2303,8 @@ ${fewShotExamples}
           <Card className="lg:col-span-4">
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle>Global Ginger Trade Volume</CardTitle>
-                <CardDescription>Monthly tracked imports across major regions (MT)</CardDescription>
+                <CardTitle>{t('tradeVolumeChart')}</CardTitle>
+                <CardDescription>{t('tradeVolumeDesc')}</CardDescription>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Live Data</Badge>
@@ -2161,31 +2332,31 @@ ${fewShotExamples}
             <CardHeader>
               <CardTitle className="text-white flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-emerald-400" />
-                GINGER AI Insights
+                {t('aiInsights')}
               </CardTitle>
-              <CardDescription className="text-slate-400">AI-generated market intelligence</CardDescription>
+              <CardDescription className="text-slate-400">{t('aiInsightsDesc')}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                <h4 className="text-xs font-bold text-emerald-400 uppercase mb-1">Market Trend</h4>
+                <h4 className="text-xs font-bold text-emerald-400 uppercase mb-1">{t('marketTrend')}</h4>
                 <p className="text-sm text-slate-300 leading-relaxed">
                   Demand for organic ginger is surging in Northern Europe. Prices are expected to stabilize as the harvest season in Southeast Asia peaks next month.
                 </p>
               </div>
               <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                <h4 className="text-xs font-bold text-blue-400 uppercase mb-1">Logistics Alert</h4>
+                <h4 className="text-xs font-bold text-blue-400 uppercase mb-1">{t('logisticsAlert')}</h4>
                 <p className="text-sm text-slate-300 leading-relaxed">
                   Port congestion in Singapore may delay shipments to Japan by 3-5 days. Consider alternative routes via Port Klang.
                 </p>
               </div>
               <div className="p-3 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                <h4 className="text-xs font-bold text-purple-400 uppercase mb-1">Opportunity</h4>
+                <h4 className="text-xs font-bold text-purple-400 uppercase mb-1">{t('opportunity')}</h4>
                 <p className="text-sm text-slate-300 leading-relaxed">
                   New import regulations in Saudi Arabia favor high-quality ginger with GAP certification. Premium margins available for certified suppliers.
                 </p>
               </div>
               <Button className="w-full bg-emerald-600 hover:bg-emerald-700 text-white mt-2">
-                Generate Full Report
+                {t('generateReport')}
               </Button>
             </CardContent>
           </Card>
@@ -2196,7 +2367,7 @@ ${fewShotExamples}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Activity className="h-5 w-5 text-emerald-600" />
-              Collection Batches (30-Day Intervals)
+              {t('collectionBatches')}
             </h2>
             <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200">
               Earliest: {getCollectionBatches().length > 0 ? new Date(getCollectionBatches()[getCollectionBatches().length - 1].start).toLocaleDateString() : 'N/A'}
@@ -2207,9 +2378,9 @@ ${fewShotExamples}
               <Card key={idx} className="border-slate-200 hover:border-emerald-200 transition-colors cursor-default group">
                 <CardHeader className="p-4 pb-2">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Batch {getCollectionBatches().length - idx}</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{t('batch')} {getCollectionBatches().length - idx}</span>
                     <Badge className="bg-emerald-50 text-emerald-700 border-emerald-100 text-[10px] h-5">
-                      {batch.leads.length} Contacts
+                      {batch.leads.length} {t('contactsCount')}
                     </Badge>
                   </div>
                   <CardTitle className="text-sm font-bold">
@@ -2230,7 +2401,7 @@ ${fewShotExamples}
                         </div>
                       )}
                     </div>
-                    <span className="text-[10px] text-slate-500 italic">Collected in this window</span>
+                    <span className="text-[10px] text-slate-500 italic">{t('collectedInWindow')}</span>
                   </div>
                   <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
                     <div className="text-[10px] text-slate-400">Avg. Score: <span className="font-bold text-slate-600">{Math.round(batch.leads.reduce((acc, l) => acc + (l.score || 0), 0) / batch.leads.length)}</span></div>
@@ -2252,8 +2423,8 @@ ${fewShotExamples}
           <CardHeader>
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <CardTitle>Buyer Directory</CardTitle>
-                <CardDescription>Manage and track your global leads.</CardDescription>
+                <CardTitle>{t('buyerDirectory')}</CardTitle>
+                <CardDescription>{t('manageTrackLeads')}</CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button 
@@ -2302,14 +2473,32 @@ ${fewShotExamples}
                   </Select>
                 </div>
                 {selectedLeads.length > 0 && (
-                  <Button 
-                    variant="default" 
-                    size="sm" 
-                    className="mt-5 bg-blue-600 hover:bg-blue-700 text-white"
-                    onClick={handleBatchEmail}
-                  >
-                    <Mail className="mr-2 h-4 w-4" /> Batch Email ({selectedLeads.length})
-                  </Button>
+                  <div className="flex items-center gap-2 mt-5">
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      className="bg-blue-600 hover:bg-blue-700 text-white"
+                      onClick={handleBatchEmail}
+                    >
+                      <Mail className="mr-2 h-4 w-4" /> Batch Email ({selectedLeads.length})
+                    </Button>
+                    <Button 
+                      variant="destructive" 
+                      size="sm" 
+                      className="bg-red-600 hover:bg-red-700 text-white"
+                      onClick={handleBulkDelete}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> {t('deleteSelected')} ({selectedLeads.length})
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="text-slate-500 hover:text-slate-900"
+                      onClick={() => setSelectedLeads([])}
+                    >
+                      {t('clearSelection')}
+                    </Button>
+                  </div>
                 )}
                 <Button 
                   variant="ghost" 
@@ -2561,6 +2750,14 @@ ${fewShotExamples}
                             <Download className="h-3.5 w-3.5 mr-1.5" />
                             <span className="text-xs">Export</span>
                           </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-8 w-8 p-0 text-slate-400 hover:text-red-600"
+                            onClick={() => handleDeleteLead(lead.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -2578,8 +2775,8 @@ ${fewShotExamples}
             {/* Contacts Header */}
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Contact Management</h1>
-                <p className="text-slate-500">Manage your saved buyers, suppliers, and partners.</p>
+                <h1 className="text-2xl font-bold tracking-tight">{t('contactManagement')}</h1>
+                <p className="text-slate-500">{t('contactSubtitle')}</p>
               </div>
               <div className="flex gap-2">
                 <Button 
@@ -2589,7 +2786,7 @@ ${fewShotExamples}
                   disabled={isVerifyingAll || filteredContacts.length === 0}
                 >
                   {isVerifyingAll ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-                  Verify All
+                  {t('verifyAll')}
                 </Button>
                 <Button 
                   variant="outline"
@@ -2598,7 +2795,7 @@ ${fewShotExamples}
                   disabled={filteredContacts.length === 0}
                 >
                   <Download className="mr-2 h-4 w-4" /> 
-                  {selectedContactIds.length > 0 ? `Export Selected (${selectedContactIds.length})` : "Export Contacts"}
+                  {selectedContactIds.length > 0 ? `${t('exportSelected')} (${selectedContactIds.length})` : t('exportContacts')}
                 </Button>
                 <div className="relative">
                   <input
@@ -2612,7 +2809,7 @@ ${fewShotExamples}
                     variant="outline"
                     className="text-slate-600 border-slate-200 hover:bg-slate-50"
                   >
-                    <Upload className="mr-2 h-4 w-4" /> Import CSV
+                    <Upload className="mr-2 h-4 w-4" /> {t('importCsv')}
                   </Button>
                 </div>
                 {selectedContactIds.length > 0 && (
@@ -2622,45 +2819,36 @@ ${fewShotExamples}
                       size="sm"
                       onClick={bulkDeleteContacts}
                     >
-                      Delete Selected ({selectedContactIds.length})
+                      {t('deleteSelected')} ({selectedContactIds.length})
                     </Button>
                     <Button 
                       variant="ghost"
                       size="sm"
                       onClick={() => setSelectedContactIds([])}
                     >
-                      Clear Selection
+                      {t('clearSelection')}
                     </Button>
                   </>
                 )}
-                <Button 
-                  variant="outline"
-                  onClick={verifyAllContacts}
-                  className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-                  disabled={isVerifyingAllContacts || filteredContacts.length === 0}
-                >
-                  {isVerifyingAllContacts ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-                  Verify All
-                </Button>
                 <Button 
                   variant="outline"
                   onClick={deleteInvalidContacts}
                   className="text-red-600 border-red-200 hover:bg-red-50"
                   disabled={contacts.filter(c => c.verificationStatus === 'invalid').length === 0}
                 >
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete Invalid
+                  <Trash2 className="mr-2 h-4 w-4" /> {t('deleteInvalid')}
                 </Button>
                 <Button 
                   className="bg-emerald-600 hover:bg-emerald-700 text-white"
                   onClick={() => setIsQuickAddModalOpen(true)}
                 >
-                  <Plus className="mr-2 h-4 w-4" /> Quick Add
+                  <Plus className="mr-2 h-4 w-4" /> {t('quickAdd')}
                 </Button>
                 <Button 
                   className="bg-emerald-600 hover:bg-emerald-700 text-white"
                   onClick={() => setIsAddContactModalOpen(true)}
                 >
-                  <Plus className="mr-2 h-4 w-4" /> Add Contact
+                  <Plus className="mr-2 h-4 w-4" /> {t('addContact')}
                 </Button>
               </div>
             </div>
@@ -2680,7 +2868,7 @@ ${fewShotExamples}
                   </div>
                   <div className="w-full md:w-48">
                     <Select 
-                      label="Category" 
+                      label={t('category')} 
                       value={contactCategoryFilter}
                       onChange={(e) => setContactCategoryFilter(e.target.value)}
                     >
@@ -2691,14 +2879,14 @@ ${fewShotExamples}
                   </div>
                   <div className="w-full md:w-48">
                     <Select 
-                      label="Last Interaction" 
+                      label={t('lastInteraction')} 
                       value={contactDateFilter}
                       onChange={(e) => setContactDateFilter(e.target.value)}
                     >
-                      <option value="All">All Time</option>
-                      <option value="Last 7 Days">Last 7 Days</option>
-                      <option value="Last 30 Days">Last 30 Days</option>
-                      <option value="More than 30 Days">More than 30 Days</option>
+                      <option value="All">{t('allTime')}</option>
+                      <option value="Last 7 Days">{t('last7Days')}</option>
+                      <option value="Last 30 Days">{t('last30Days')}</option>
+                      <option value="More than 30 Days">{t('moreThan30Days')}</option>
                     </Select>
                   </div>
                 </div>
@@ -2724,12 +2912,12 @@ ${fewShotExamples}
                           }}
                         />
                       </TableHead>
-                      <TableHead>Name & Company</TableHead>
-                      <TableHead>Contact Info</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Last Interaction</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead>{t('nameAndCompany')}</TableHead>
+                      <TableHead>{t('contactInfo')}</TableHead>
+                      <TableHead>{t('category')}</TableHead>
+                      <TableHead>{t('location')}</TableHead>
+                      <TableHead>{t('lastInteraction')}</TableHead>
+                      <TableHead className="text-right">{t('actions')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2881,8 +3069,8 @@ ${fewShotExamples}
               <div className="lg:col-span-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-lg font-semibold">Market Overview</CardTitle>
-                    <CardDescription>Summary of your contacts by category</CardDescription>
+                    <CardTitle className="text-lg font-semibold">{t('marketOverview')}</CardTitle>
+                    <CardDescription>{t('contactsByCategory')}</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -2902,7 +3090,7 @@ ${fewShotExamples}
               <div className="space-y-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-lg font-semibold">Quick Contact Entry</CardTitle>
+                    <CardTitle className="text-lg font-semibold">{t('quickContactEntry')}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <Input placeholder="Name" value={quickContact.name} onChange={(e) => setQuickContact({...quickContact, name: e.target.value})} />
@@ -2919,8 +3107,8 @@ ${fewShotExamples}
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Data Extraction Engine</h1>
-                <p className="text-slate-500">Parse unstructured text into standardized JSON contact payloads.</p>
+                <h1 className="text-2xl font-bold tracking-tight">{t('dataExtractor')}</h1>
+                <p className="text-slate-500">{t('extractorSubtitle')}</p>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
@@ -2939,10 +3127,10 @@ ${fewShotExamples}
                   <div>
                     <CardTitle className="text-lg flex items-center gap-2">
                       <TypeIcon className="h-5 w-5 text-emerald-600" />
-                      Unstructured Input
+                      {t('unstructuredInput')}
                     </CardTitle>
                     <CardDescription>
-                      Paste raw text or upload a file containing contact notes.
+                      {t('extractorSubtitle')}
                     </CardDescription>
                   </div>
                   <div className="relative">
@@ -2955,7 +3143,7 @@ ${fewShotExamples}
                     />
                     <Button variant="outline" size="sm" className="h-8">
                       <Upload className="h-3.5 w-3.5 mr-2" />
-                      Load File
+                      {t('loadFile')}
                     </Button>
                   </div>
                 </CardHeader>
@@ -2992,10 +3180,10 @@ ${fewShotExamples}
                   <div>
                     <CardTitle className="text-lg flex items-center gap-2">
                       <SearchCode className="h-5 w-5 text-emerald-600" />
-                      Standardized JSON Output
+                      {t('jsonOutput')}
                     </CardTitle>
                     <CardDescription>
-                      Strictly formatted payload for downstream systems.
+                      {t('standardizedOutputDesc')}
                     </CardDescription>
                   </div>
                   {extractedJson && (
@@ -3090,7 +3278,7 @@ ${fewShotExamples}
                             <div className="mt-4 p-2 bg-slate-50 rounded border border-slate-200 flex items-center gap-2">
                               <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
                               <span className="text-[10px] text-slate-500 font-medium">
-                                AI is learning from {extractionCorrections.length} previous corrections.
+                                {t('aiLearning').replace('{count}', extractionCorrections.length.toString())}
                               </span>
                             </div>
                           )}
@@ -3100,8 +3288,8 @@ ${fewShotExamples}
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-center p-8 bg-slate-50 rounded-lg border border-dashed border-slate-300">
                       <Activity className="h-12 w-12 text-slate-300 mb-4" />
-                      <h3 className="font-semibold text-slate-500">Awaiting Input</h3>
-                      <p className="text-sm text-slate-400 mt-1">Paste unstructured text on the left to begin extraction.</p>
+                      <h3 className="font-semibold text-slate-500">{t('awaitingInput')}</h3>
+                      <p className="text-sm text-slate-400 mt-1">{t('pasteText')}</p>
                     </div>
                   )}
                 </CardContent>
@@ -3116,28 +3304,28 @@ ${fewShotExamples}
                     <div>
                       <h4 className="text-white font-semibold mb-2 flex items-center gap-2">
                         <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                        PII Protection
+                        {t('piiProtection')}
                       </h4>
                       <p className="text-xs leading-relaxed opacity-70">
-                        Sensitive data like passwords, credit cards, and SSNs are automatically discarded during the normalization process.
+                        {t('piiDesc')}
                       </p>
                     </div>
                     <div>
                       <h4 className="text-white font-semibold mb-2 flex items-center gap-2">
                         <Globe className="h-4 w-4 text-emerald-400" />
-                        Platform Mapping
+                        {t('platformMapping')}
                       </h4>
                       <p className="text-xs leading-relaxed opacity-70">
-                        Handles are mapped to: facebook, instagram, whatsapp, wechat, telegram, amazon, tiktok, messenger, and notebook.
+                        {t('platformDesc')}
                       </p>
                     </div>
                     <div>
                       <h4 className="text-white font-semibold mb-2 flex items-center gap-2">
                         <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                        MX Verification
+                        {t('mxVerification')}
                       </h4>
                       <p className="text-xs leading-relaxed opacity-70">
-                        All extracted emails are flagged with "mx_verified": false to trigger downstream DNS lookups before database entry.
+                        {t('mxDesc')}
                       </p>
                     </div>
                   </div>
@@ -3148,7 +3336,7 @@ ${fewShotExamples}
                 <CardContent className="p-6">
                   <h4 className="text-white font-semibold mb-3 flex items-center gap-2">
                     <Code2 className="h-4 w-4 text-emerald-400" />
-                    OUTPUT FORMAT (JSON SCHEMA)
+                    {t('outputFormat')}
                   </h4>
                   <pre className="text-[10px] font-mono leading-tight opacity-80 bg-slate-900/50 p-3 rounded border border-slate-700 overflow-auto max-h-[120px] custom-scrollbar">
 {`{
@@ -3177,12 +3365,12 @@ ${fewShotExamples}
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">OSINT Market Research</h1>
-                <p className="text-slate-500">Real-time intelligence on international ginger import demand.</p>
+                <h1 className="text-2xl font-bold tracking-tight">{t('osintTitle')}</h1>
+                <p className="text-slate-500">{t('osintSubtitle')}</p>
               </div>
               <div className="flex items-center gap-4">
                 <Input 
-                  placeholder="Enter countries (e.g. USA, Japan, Germany)"
+                  placeholder={t('enterCountries')}
                   value={selectedCountries.join(', ')}
                   onChange={(e) => setSelectedCountries(e.target.value.split(',').map(c => c.trim()).filter(c => c !== ''))}
                   className="w-64"
@@ -3203,7 +3391,7 @@ ${fewShotExamples}
                   disabled={isPerformingOsint}
                 >
                   {isPerformingOsint ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                  Execute Research
+                  {t('executeResearch')}
                 </Button>
               </div>
             </div>
@@ -3211,47 +3399,61 @@ ${fewShotExamples}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card className="md:col-span-2">
                 <CardHeader>
-                  <CardTitle>Research Findings</CardTitle>
-                  <CardDescription>Real-time intelligence on international ginger import demand.</CardDescription>
+                  <CardTitle>{t('researchFindings')}</CardTitle>
+                  <CardDescription>{t('findingsSubtitle')}</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  {osintResults.length > 0 ? (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Company</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Demand</TableHead>
-                          <TableHead>Email</TableHead>
-                          <TableHead>Phone</TableHead>
-                          <TableHead>Source</TableHead>
-                          <TableHead>Source Type</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {osintResults.map((result, i) => (
-                          <TableRow key={i}>
-                            <TableCell className="font-medium">{result.company_name}</TableCell>
-                            <TableCell>{result.registration_status}</TableCell>
-                            <TableCell className="max-w-xs truncate">{result.demand_indicator}</TableCell>
-                            <TableCell>{result.corporate_email}</TableCell>
-                            <TableCell>{result.corporate_phone}</TableCell>
-                            <TableCell>
-                              <a href={result.data_source_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                                View Source
-                              </a>
-                            </TableCell>
-                            <TableCell>{result.government_source_type}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-12 text-slate-400">
-                      <SearchCode className="h-12 w-12 mb-4 opacity-20" />
-                      <p>No research findings yet. Execute research to begin.</p>
+                <CardContent className="space-y-8">
+                  {osintResults && osintResults.report && (
+                    <div className="p-6 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="prose prose-slate max-w-none">
+                        <ReactMarkdown>{osintResults.report}</ReactMarkdown>
+                      </div>
                     </div>
                   )}
+
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-bold flex items-center gap-2">
+                      <Users className="h-5 w-5 text-emerald-600" />
+                      Extracted Business Leads
+                    </h3>
+                    {osintResults && osintResults.leads.length > 0 ? (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>{t('companyName')}</TableHead>
+                            <TableHead>{t('registrationStatus')}</TableHead>
+                            <TableHead>{t('demand')}</TableHead>
+                            <TableHead>{t('email')}</TableHead>
+                            <TableHead>{t('phone')}</TableHead>
+                            <TableHead>{t('source')}</TableHead>
+                            <TableHead>{t('sourceType')}</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {osintResults.leads.map((result, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="font-medium">{result.company_name}</TableCell>
+                              <TableCell>{result.registration_status}</TableCell>
+                              <TableCell className="max-w-xs truncate">{result.demand_indicator}</TableCell>
+                              <TableCell>{result.corporate_email}</TableCell>
+                              <TableCell>{result.corporate_phone}</TableCell>
+                              <TableCell>
+                                <a href={result.data_source_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                                  {t('viewSource')}
+                                </a>
+                              </TableCell>
+                              <TableCell>{result.government_source_type}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                        <SearchCode className="h-12 w-12 mb-4 opacity-20" />
+                        <p>{t('noFindings')}</p>
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
 
@@ -3260,7 +3462,7 @@ ${fewShotExamples}
                   <CardHeader>
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
                       <Globe className="h-4 w-4 text-blue-500" />
-                      Trade Data Resources
+                      {t('tradeResources')}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
@@ -3292,7 +3494,7 @@ ${fewShotExamples}
                   <CardHeader>
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
                       <Search className="h-4 w-4 text-emerald-500" />
-                      Google Search Shortcuts
+                      {t('searchShortcuts')}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2">
@@ -3343,12 +3545,12 @@ ${fewShotExamples}
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Privacy & GDPR Compliance</h1>
-                <p className="text-slate-500">Manage data subject requests and ensure regulatory compliance.</p>
+                <h1 className="text-2xl font-bold tracking-tight">{t('privacyTitle')}</h1>
+                <p className="text-slate-500">{t('privacySubtitle')}</p>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
-                  <ShieldCheck className="h-3 w-3 mr-1" /> GDPR Compliant
+                  <ShieldCheck className="h-3 w-3 mr-1" /> {t('gdprCompliant')}
                 </Badge>
               </div>
             </div>
@@ -3358,21 +3560,21 @@ ${fewShotExamples}
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
                     <MessageCircle className="h-5 w-5 text-blue-600" />
-                    Data Subject Access Requests (DSAR)
+                    {t('dsarTitle')}
                   </CardTitle>
                   <CardDescription>
-                    Incoming requests from individuals regarding their personal data.
+                    {t('dsarSubtitle')}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Subject Email</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
+                        <TableHead>{t('subjectEmail')}</TableHead>
+                        <TableHead>{t('type')}</TableHead>
+                        <TableHead>{t('date')}</TableHead>
+                        <TableHead>{t('status')}</TableHead>
+                        <TableHead className="text-right">{t('actions')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -3409,7 +3611,7 @@ ${fewShotExamples}
                                     className="h-8 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
                                     onClick={() => handleDSARAction(dsar.id, 'Completed')}
                                   >
-                                    Approve
+                                    {t('approve')}
                                   </Button>
                                   <Button 
                                     size="sm" 
@@ -3417,7 +3619,7 @@ ${fewShotExamples}
                                     className="h-8 text-red-600 border-red-200 hover:bg-red-50"
                                     onClick={() => handleDSARAction(dsar.id, 'Rejected')}
                                   >
-                                    Reject
+                                    {t('reject')}
                                   </Button>
                                 </div>
                               )}
@@ -3427,7 +3629,7 @@ ${fewShotExamples}
                       ) : (
                         <TableRow>
                           <TableCell colSpan={5} className="text-center py-8 text-slate-400">
-                            No active data subject requests.
+                            {t('noDsars')}
                           </TableCell>
                         </TableRow>
                       )}
@@ -3441,26 +3643,26 @@ ${fewShotExamples}
                   <CardHeader>
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
                       <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                      Compliance Tools
+                      {t('complianceTools')}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                      <h4 className="text-xs font-bold text-slate-700 mb-1">Data Anonymization</h4>
+                      <h4 className="text-xs font-bold text-slate-700 mb-1">{t('dataAnonymization')}</h4>
                       <p className="text-[10px] text-slate-500 mb-3">
-                        Irreversibly mask personal identifiers while preserving business context for analytics.
+                        {t('anonymizationDesc')}
                       </p>
                       <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => setActiveTab('contacts')}>
-                        Go to Contacts to Anonymize
+                        {t('goToContacts')}
                       </Button>
                     </div>
                     <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                      <h4 className="text-xs font-bold text-slate-700 mb-1">Data Retention Policy</h4>
+                      <h4 className="text-xs font-bold text-slate-700 mb-1">{t('retentionPolicy')}</h4>
                       <p className="text-[10px] text-slate-500 mb-3">
-                        Automatically flag leads older than 24 months for review or deletion.
+                        {t('retentionDesc')}
                       </p>
                       <Button variant="outline" size="sm" className="w-full text-xs" disabled>
-                        Configure Retention
+                        {t('configureRetention')}
                       </Button>
                     </div>
                   </CardContent>
@@ -3468,7 +3670,7 @@ ${fewShotExamples}
 
                 <Card className="bg-emerald-900 text-white border-none">
                   <CardHeader>
-                    <CardTitle className="text-white text-sm">Privacy Score</CardTitle>
+                    <CardTitle className="text-white text-sm">{t('privacyScore')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="text-3xl font-bold mb-1">94%</div>
@@ -3476,10 +3678,157 @@ ${fewShotExamples}
                       <div className="bg-emerald-400 h-full w-[94%]"></div>
                     </div>
                     <p className="text-[10px] text-emerald-300 leading-relaxed">
-                      Your current data handling practices are highly compliant with GDPR and CCPA standards.
+                      {t('privacyScoreDesc')}
                     </p>
                   </CardContent>
                 </Card>
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 'marketHub' && (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight">{t('marketHub')}</h1>
+                <p className="text-slate-500">{t('marketHubSubtitle')}</p>
+              </div>
+              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">
+                <Activity className="h-3.5 w-3.5 mr-1" /> Real-time Price Tracker
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="flex flex-col">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <MessageCircle className="h-5 w-5 text-emerald-600" />
+                    {t('rawLogsInput')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('priceExtractionSubtitle')}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex-1 flex flex-col gap-4">
+                  <textarea
+                    className="flex-1 min-h-[300px] w-full p-4 font-mono text-sm bg-slate-50 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
+                    placeholder={t('rawLogsPlaceholder')}
+                    value={marketLogs}
+                    onChange={(e) => setMarketLogs(e.target.value)}
+                  />
+                  <Button 
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-12 text-lg"
+                    onClick={handleExtractPrice}
+                    disabled={isExtractingPrice || !marketLogs.trim()}
+                  >
+                    {isExtractingPrice ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        {t('extracting')}
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="mr-2 h-5 w-5" />
+                        {t('extractPrice')}
+                      </>
+                    )}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <div className="space-y-6">
+                {priceIntelligence ? (
+                  <>
+                    <Card className="border-emerald-200 bg-emerald-50/30">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-emerald-700">
+                          {t('marketPriceBar')}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 bg-white rounded-xl border border-emerald-100 shadow-sm">
+                            <div className="text-xs text-slate-500 mb-1">{t('currentExtractedPrice')}</div>
+                            <div className="text-2xl font-bold text-emerald-700">{priceIntelligence.priceBar.price}</div>
+                          </div>
+                          <div className="p-4 bg-white rounded-xl border border-emerald-100 shadow-sm">
+                            <div className="text-xs text-slate-500 mb-1">{t('currency')}</div>
+                            <div className="text-2xl font-bold text-slate-700">{priceIntelligence.priceBar.currency}</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-blue-200 bg-blue-50/30">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-bold uppercase tracking-wider text-blue-700">
+                          {t('checkingPriceDateBar')}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 bg-white rounded-xl border border-blue-100 shadow-sm">
+                            <div className="text-xs text-slate-500 mb-1">{t('extractionTimestamp')}</div>
+                            <div className="text-lg font-medium text-blue-700">{priceIntelligence.dateBar.timestamp}</div>
+                          </div>
+                          <div className="p-4 bg-white rounded-xl border border-blue-100 shadow-sm">
+                            <div className="text-xs text-slate-500 mb-1">{t('platformSource')}</div>
+                            <div className="text-lg font-medium text-slate-700">{priceIntelligence.dateBar.source}</div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {priceIntelligence.bottlenecks && priceIntelligence.bottlenecks !== "None detected" && (
+                      <Card className="border-amber-200 bg-amber-50/50">
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-sm font-bold uppercase tracking-wider text-amber-700 flex items-center gap-2">
+                            <AlertCircle className="h-4 w-4" />
+                            [AUTH_REQUIRED] HITL Alerts
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="p-4 bg-white rounded-xl border border-amber-100 shadow-sm prose prose-sm max-w-none prose-amber">
+                            <ReactMarkdown>{priceIntelligence.bottlenecks}</ReactMarkdown>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    <Card border-slate-200>
+                      <CardHeader className="pb-2">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-700">
+                            {t('exchangeMonitorPayload')}
+                          </CardTitle>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-7 text-xs"
+                            onClick={() => navigator.clipboard.writeText(JSON.stringify(priceIntelligence.payload, null, 2))}
+                          >
+                            <Copy className="h-3 w-3 mr-1" /> {t('copyJson')}
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <pre className="p-4 bg-slate-900 text-emerald-400 font-mono text-[10px] rounded-lg overflow-x-auto">
+                          {JSON.stringify(priceIntelligence.payload, null, 2)}
+                        </pre>
+                      </CardContent>
+                    </Card>
+                  </>
+                ) : (
+                  <Card className="flex items-center justify-center p-12 border-dashed border-2 flex-col gap-4 text-slate-400">
+                    <div className="bg-slate-100 p-6 rounded-full">
+                      <TrendingUp className="h-12 w-12 opacity-20" />
+                    </div>
+                    <div className="text-center">
+                      <p className="font-medium text-slate-500">{t('awaitingInput')}</p>
+                      <p className="text-xs">{t('pasteText')}</p>
+                    </div>
+                  </Card>
+                )}
               </div>
             </div>
           </div>

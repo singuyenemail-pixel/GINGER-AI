@@ -34,33 +34,35 @@ async function startServer() {
 
   app.post("/api/verify-email", async (req, res) => {
     const { email } = req.body;
+    console.log(`[API] Verifying email: ${email}`);
+
     if (!email || typeof email !== "string" || !email.includes("@")) {
+      console.log(`[API] Invalid email format: ${email}`);
       return res.json({ valid: false, reason: "Invalid format" });
     }
 
     const domain = email.split("@")[1];
     
     try {
-      // Check if domain has any DNS records (DNS exists)
+      // Check if domain has MX records - using dns.promises for better reliability
+      console.log(`[API] Resolving MX for domain: ${domain}`);
       try {
-        await resolveAny(domain);
-      } catch (dnsError) {
-        return res.json({ valid: false, reason: "Domain has no DNS records" });
-      }
-
-      // Check if domain has MX records
-      try {
-        const mxRecords = await resolveMx(domain);
+        const mxRecords = await dns.promises.resolveMx(domain);
         if (mxRecords && mxRecords.length > 0) {
+          console.log(`[API] Valid MX records found for ${domain}`);
           return res.json({ valid: true });
         } else {
+          console.log(`[API] No MX records for ${domain}`);
           return res.json({ valid: false, reason: "Domain has no MX records" });
         }
-      } catch (mxError) {
-        return res.json({ valid: false, reason: "Domain has no MX records" });
+      } catch (dnsError: any) {
+        console.log(`[API] DNS Error for ${domain}: ${dnsError.message}`);
+        // If domain doesn't exist or no MX records
+        return res.json({ valid: false, reason: `DNS Error: ${dnsError.code || 'Failed'}` });
       }
-    } catch (error) {
-      return res.json({ valid: false, reason: "Verification failed" });
+    } catch (error: any) {
+      console.error(`[API] Unexpected error during verification for ${email}:`, error);
+      return res.status(500).json({ valid: false, reason: "Internal server error during verification" });
     }
   });
 
