@@ -37,7 +37,12 @@ export interface GingerMarketResearchResult {
 }
 
 export async function performGingerMarketResearch(countries: string[]): Promise<GingerMarketResearchResult> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+  const customApiKey = typeof window !== 'undefined' ? localStorage.getItem('ginger_custom_gemini_api_key') : null;
+  const apiKey = (customApiKey && customApiKey.trim()) ? customApiKey.trim() : process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("Gemini API Key is not configured. Please click the Settings gear icon in the header to set your API Key.");
+  }
+  const ai = new GoogleGenAI({ apiKey });
   
   const countryFilter = countries.length > 0 ? `Focus research specifically on companies located in: ${countries.join(', ')}.` : 'Search globally.';
   const targetSitesList = TARGET_SITES.map(site => `- ${site}`).join('\n');
@@ -100,7 +105,7 @@ Permitted Sources: Official national government company registries, official cus
 [Provide step-by-step instructions for the user to manually investigate the bottlenecks identified in Section 2 using their own authenticated accounts.]`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-3.5-flash",
     contents: prompt,
     config: {
       responseMimeType: "application/json",

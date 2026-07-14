@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef, ChangeEvent } from "react"
-import { Search, Filter, Download, Plus, MapPin, Building2, Phone, Mail, Globe, TrendingUp, Users, Activity, DollarSign, MessageCircle, ExternalLink, Linkedin, SearchCode, Sparkles, Wand2, CheckCircle2, AlertCircle, Bold, Italic, Underline, Type as TypeIcon, UserPlus, ShieldCheck, UserCircle, RefreshCw, X, LayoutDashboard, Contact as ContactIcon, Trash2, Edit2, Tag, Copy, Loader2, Code2, ShoppingBag, Truck, Handshake, Clock, Upload } from "lucide-react"
+import { Search, Filter, Download, Plus, MapPin, Building2, Phone, Mail, Globe, TrendingUp, Users, Activity, DollarSign, MessageCircle, ExternalLink, Linkedin, SearchCode, Sparkles, Wand2, CheckCircle2, AlertCircle, Bold, Italic, Underline, Type as TypeIcon, UserPlus, ShieldCheck, UserCircle, RefreshCw, X, LayoutDashboard, Contact as ContactIcon, Trash2, Edit2, Tag, Copy, Loader2, Code2, ShoppingBag, Truck, Handshake, Clock, Upload, Settings, Sliders } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card"
 import { GoogleGenAI, Type } from "@google/genai"
+
+export const getGeminiClient = () => {
+  const customApiKey = localStorage.getItem('ginger_custom_gemini_api_key');
+  const apiKey = (customApiKey && customApiKey.trim()) ? customApiKey.trim() : process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("Gemini API Key is not configured. Please click the Settings gear icon in the top header to set your API Key.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import validator from 'validator';
@@ -75,7 +84,9 @@ interface DSAR {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'contacts' | 'extractor' | 'osint' | 'privacy' | 'marketHub'>('dashboard')
-  const [language, setLanguage] = useState<Language>('en')
+  const [language, setLanguage] = useState<Language>(() => {
+    return (localStorage.getItem('ginger_app_language') as Language) || 'vi';
+  })
   const t = (key: keyof typeof translations['en']) => translations[language][key] || translations['en'][key]
   
   const [marketLogs, setMarketLogs] = useState("")
@@ -100,8 +111,16 @@ export default function App() {
   const [locationFilter, setLocationFilter] = useState("All")
   const [typeFilter, setTypeFilter] = useState("All")
   const [statusFilter, setStatusFilter] = useState("All")
-  const [whatsappTemplate, setWhatsappTemplate] = useState("Hello {contact} from {company}, I'm contacting you from GINGER AI regarding ginger commodities.")
-  const [emailTemplate, setEmailTemplate] = useState("<p>Dear {salutation} {contact},</p><p>We are contacting you from GINGER AI regarding your interest in ginger commodities for {company} in {location}.</p><p>We have noticed your significant volume of {volume} and would like to discuss how our premium ginger can support your operations.</p><p>Best regards,<br>{sender_name}</p>")
+  const [projectName, setProjectName] = useState(() => localStorage.getItem('ginger_project_name') || "GINGER AI");
+  const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem('ginger_custom_gemini_api_key') || "");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [tempProjectName, setTempProjectName] = useState(() => localStorage.getItem('ginger_project_name') || "GINGER AI");
+  const [tempCustomApiKey, setTempCustomApiKey] = useState(() => localStorage.getItem('ginger_custom_gemini_api_key') || "");
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [keyTestResult, setKeyTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const [whatsappTemplate, setWhatsappTemplate] = useState(() => `Hello {contact} from {company}, I'm contacting you from ${localStorage.getItem('ginger_project_name') || "GINGER AI"} regarding ginger commodities.`)
+  const [emailTemplate, setEmailTemplate] = useState(() => `<p>Dear {salutation} {contact},</p><p>We are contacting you from ${localStorage.getItem('ginger_project_name') || "GINGER AI"} regarding your interest in ginger commodities for {company} in {location}.</p><p>We have noticed your significant volume of {volume} and would like to discuss how our premium ginger can support your operations.</p><p>Best regards,<br>{sender_name}</p>`)
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isBatchEmailModalOpen, setIsBatchEmailModalOpen] = useState(false)
   const [isEnriching, setIsEnriching] = useState(false)
@@ -206,6 +225,47 @@ export default function App() {
     }).catch(err => console.error("Failed to save sender contact:", err));
   };
 
+  const handleSaveSettings = () => {
+    localStorage.setItem('ginger_project_name', tempProjectName);
+    localStorage.setItem('ginger_custom_gemini_api_key', tempCustomApiKey);
+    setProjectName(tempProjectName);
+    setCustomApiKey(tempCustomApiKey);
+    setIsSettingsOpen(false);
+    setKeyTestResult(null);
+
+    // Automatically update the template states if they contain the old project name
+    setWhatsappTemplate(prev => prev.replace(projectName, tempProjectName));
+    setEmailTemplate(prev => prev.replace(projectName, tempProjectName));
+    
+    // Update senderName if it's the default GINGER AI Team or customized team
+    if (senderName === `${projectName} Team` || senderName === "GINGER AI Team") {
+      setSenderName(`${tempProjectName} Team`);
+      saveSenderContact(`${tempProjectName} Team`);
+    }
+  };
+
+  const testApiKey = async (keyToTest: string) => {
+    setIsTestingKey(true);
+    setKeyTestResult(null);
+    try {
+      const ai = new GoogleGenAI({ apiKey: keyToTest });
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: "Respond with exactly the word 'OK' if you can hear me. Do not include markdown or other text.",
+      });
+      if (response.text.trim().toLowerCase().includes("ok") || response.text.length > 0) {
+        setKeyTestResult({ success: true, message: "Connection successful! API Key verified successfully." });
+      } else {
+        setKeyTestResult({ success: false, message: "Received unexpected response from Gemini API." });
+      }
+    } catch (err: any) {
+      console.error("API Key testing error:", err);
+      setKeyTestResult({ success: false, message: err.message || "Failed to verify key. Please check your key and try again." });
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
+
   const hasPermission = (permission: string) => {
     return (PERMISSIONS[userRole] as readonly string[]).includes(permission);
   }
@@ -267,7 +327,7 @@ export default function App() {
       // Strip HTML for the .txt download
       const plainTextBody = stripHtml(body);
         
-      return `To: ${l.email}\nSubject: Inquiry from GINGER AI - ${l.company}\n\n${plainTextBody}`;
+      return `To: ${l.email}\nSubject: Inquiry from ${projectName} - ${l.company}\n\n${plainTextBody}`;
     }).join('\n\n' + '='.repeat(30) + '\n\n');
 
     const blob = new Blob([emailBody], { type: 'text/plain' });
@@ -303,11 +363,11 @@ export default function App() {
     setEnrichmentStatus("Analyzing leads...");
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       const selectedData = leads.filter(l => selectedLeads.includes(l.id));
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: `Enrich these ginger buyer leads with professional contact details (emails, phones) and gender if missing. 
         Return ONLY a JSON array of updated lead objects. 
         Leads: ${JSON.stringify(selectedData.map(l => ({ id: l.id, company: l.company, contact: l.contact, location: l.location, email: l.email, phone: l.phone, gender: l.gender })))}`,
@@ -325,9 +385,9 @@ export default function App() {
       
       setEnrichmentStatus("Enrichment complete!");
       setTimeout(() => setEnrichmentStatus(""), 3000);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Enrichment error:", error);
-      setEnrichmentStatus("Enrichment failed. Please try again.");
+      setEnrichmentStatus(error.message || "Enrichment failed. Please try again.");
     } finally {
       setIsEnriching(false);
     }
@@ -339,11 +399,11 @@ export default function App() {
     setEnrichmentStatus("Analyzing lead conversion potential...");
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       const selectedData = leads.filter(l => selectedLeads.includes(l.id));
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: `Analyze these ginger buyer leads and assign a conversion score (0-100) and a brief reasoning (max 15 words). 
         Consider volume (higher is better), location (proximity to major ports/markets), and type (manufacturers/importers usually higher).
         Return ONLY a JSON array of objects with { id, score, scoreReasoning }. 
@@ -362,9 +422,9 @@ export default function App() {
       
       setEnrichmentStatus("Scoring complete!");
       setTimeout(() => setEnrichmentStatus(""), 3000);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Scoring error:", error);
-      setEnrichmentStatus("Scoring failed. Please try again.");
+      setEnrichmentStatus(error.message || "Scoring failed. Please try again.");
     } finally {
       setIsScoring(false);
     }
@@ -377,7 +437,7 @@ export default function App() {
     setGeneratedFollowUp("");
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       const salutation = getSalutation(lead);
       const prompt = `Generate a personalized, persuasive follow-up email for a ginger buyer lead.
       Lead Details:
@@ -391,21 +451,21 @@ export default function App() {
       - Interaction History/Notes: ${lead.notes || "No previous notes"}
       - Last Contact: ${lead.lastContact}
 
-      Context: We are GINGER AI, a premium ginger supplier.
+      Context: We are ${projectName}, a premium ginger supplier.
       The email should be professional, reference their specific needs/volume, and suggest a clear next step (e.g., a call or sample shipment).
       Use a tone that matches their score (more urgent/direct for high scores, more educational for lower scores).
       Return ONLY the email body in HTML format (using <p>, <br>, <strong>). Do not include subject line.
       End with "Best regards, [Your Name]".`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: prompt,
       });
 
       setGeneratedFollowUp(response.text.replace(/\[Your Name\]/g, senderName));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Follow-up generation error:", error);
-      setGeneratedFollowUp("<p>Failed to generate follow-up. Please try again.</p>");
+      setGeneratedFollowUp(`<p className="text-red-500 font-medium">Failed to generate follow-up: ${error.message || 'Please verify your API key in Settings.'}</p>`);
     } finally {
       setIsGeneratingFollowUp(false);
     }
@@ -517,9 +577,9 @@ export default function App() {
   const collectGingerBuyers = async () => {
     setIsCollecting(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: "Find recent ginger buyer announcements, ginger import demand, or ginger buyer directories from the last 12 months. Extract company name, contact person, email, phone, and location.",
         config: {
           tools: [{ googleSearch: {} }],
@@ -564,8 +624,9 @@ export default function App() {
         setLeads(prev => [newLead, ...prev]);
         verifyLeadEmail(leadId, newLead.email);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Collection error:", error);
+      alert("Lead extraction failed: " + (error.message || "Unknown error. Please check your Gemini API Key in settings."));
     } finally {
       setIsCollecting(false);
     }
@@ -1117,7 +1178,7 @@ export default function App() {
     if (!marketLogs.trim()) return;
     setIsExtractingPrice(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       const prompt = `You are an expert OSINT (Open Source Intelligence) Research Assistant specialized in deterministic Market Intelligence Extraction. Your objective is to conduct comprehensive data analysis from public and provided logs while strictly adhering to privacy and security boundaries.
 
 # CONSTRAINTS
@@ -1165,7 +1226,7 @@ Your output must contain strictly three sections, formatted exactly as follows:
 ${marketLogs}`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: prompt,
       });
 
@@ -1191,8 +1252,9 @@ ${marketLogs}`;
         payload: jsonMatch ? JSON.parse(jsonMatch[1]) : null
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Price extraction failed:", error);
+      alert("Price extraction failed: " + (error.message || "Unknown error. Please check your Gemini API Key in settings."));
     } finally {
       setIsExtractingPrice(false);
     }
@@ -1206,7 +1268,7 @@ ${marketLogs}`;
     setIsReviewingExtraction(false);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const ai = getGeminiClient();
       
       const fewShotExamples = extractionCorrections.length > 0 
         ? `\n# FEW-SHOT EXAMPLES (LEARNED FROM USER FEEDBACK)\n${extractionCorrections.slice(-3).map(c => `Input: ${c.input}\nOutput: ${JSON.stringify(c.output)}`).join('\n\n')}`
@@ -1245,7 +1307,7 @@ ${fewShotExamples}
 }`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: unstructuredText,
         config: {
           systemInstruction,
@@ -1256,9 +1318,9 @@ ${fewShotExamples}
       const result = JSON.parse(response.text);
       setExtractedJson(result);
       setEditedExtractedJson(JSON.stringify(result, null, 2));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Extraction error:", error);
-      setExtractionError("Failed to extract data. Ensure the input contains valid contact information.");
+      setExtractionError("Failed to extract data: " + (error.message || "Please verify your Gemini API Key in Settings."));
     } finally {
       setIsExtracting(false);
     }
@@ -1388,7 +1450,7 @@ ${fewShotExamples}
           <div className="bg-emerald-600 p-1.5 rounded-lg">
             <Globe className="h-6 w-6 text-white" />
           </div>
-          <span>GINGER AI</span>
+          <span>{projectName}</span>
         </div>
 
         <nav className="flex items-center gap-1">
@@ -1453,7 +1515,11 @@ ${fewShotExamples}
             <Globe className="h-3.5 w-3.5 text-slate-500" />
             <Select 
               value={language} 
-              onChange={(e) => setLanguage(e.target.value as Language)}
+              onChange={(e) => {
+                const newLang = e.target.value as Language;
+                setLanguage(newLang);
+                localStorage.setItem('ginger_app_language', newLang);
+              }}
               className="h-6 text-[10px] border-none bg-transparent focus:ring-0 p-0 w-16"
             >
               <option value="en">EN</option>
@@ -1472,6 +1538,20 @@ ${fewShotExamples}
               <option value={ROLES.SALES_REP}>{t('salesRep')}</option>
             </Select>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors flex items-center justify-center shrink-0"
+            onClick={() => {
+              setTempProjectName(projectName);
+              setTempCustomApiKey(customApiKey);
+              setKeyTestResult(null);
+              setIsSettingsOpen(true);
+            }}
+            title="Configure System Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
           <div className="relative w-72">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
             <Input
@@ -1493,6 +1573,141 @@ ${fewShotExamples}
           )}
         </div>
       </header>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 animate-in fade-in duration-200">
+          <Card className="w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200 bg-white">
+            <CardHeader className="border-b pb-4 relative">
+              <div className="flex items-center gap-2">
+                <div className="bg-emerald-100 p-2 rounded-lg text-emerald-700">
+                  <Settings className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle className="text-lg font-bold text-slate-800">System Configuration Settings</CardTitle>
+                  <CardDescription className="text-xs text-slate-500">Manage branding identity and Gemini API credentials</CardDescription>
+                </div>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 rounded-full"
+                onClick={() => {
+                  setIsSettingsOpen(false);
+                  setKeyTestResult(null);
+                }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-6 space-y-6">
+              {/* Branding Section */}
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                  <Sliders className="h-4 w-4 text-emerald-600" />
+                  Project / Brand Name
+                </label>
+                <Input
+                  type="text"
+                  value={tempProjectName}
+                  onChange={(e) => setTempProjectName(e.target.value)}
+                  placeholder="e.g. GINGER AI"
+                  className="w-full border-slate-200 focus-visible:ring-emerald-500 text-sm"
+                />
+                <p className="text-xs text-slate-400">
+                  Updates references in top header, emails, and automatic WhatsApp messaging.
+                </p>
+              </div>
+
+              {/* API Key Section */}
+              <div className="space-y-3 border-t pt-4">
+                <label className="text-sm font-semibold text-slate-700 flex items-center justify-between">
+                  <span>Custom Gemini API Key</span>
+                  <div className="flex items-center gap-1.5">
+                    {tempCustomApiKey ? (
+                      <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                        Custom Key Inputted
+                      </span>
+                    ) : process.env.GEMINI_API_KEY ? (
+                      <span className="text-[10px] font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                        System Key Active
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full">
+                        ⚠️ Key Required
+                      </span>
+                    )}
+                  </div>
+                </label>
+                <div className="relative">
+                  <Input
+                    type="password"
+                    value={tempCustomApiKey}
+                    onChange={(e) => setTempCustomApiKey(e.target.value)}
+                    placeholder={process.env.GEMINI_API_KEY ? "Using System-Configured Key (Leave empty to keep)" : "Enter custom Gemini API key..."}
+                    className="w-full border-slate-200 focus-visible:ring-emerald-500 text-sm font-mono"
+                  />
+                </div>
+                <p className="text-xs text-slate-400">
+                  {process.env.GEMINI_API_KEY 
+                    ? "If system API key fails, provide your personal Google AI Studio key here. It remains securely in your browser's local storage." 
+                    : "A Gemini API Key is required for intelligence features like Lead Enrichment, Scoring, and email drafting."}
+                </p>
+                
+                {/* Testing controls */}
+                <div className="flex flex-col gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-slate-600">Test Connection & Verification</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs border-slate-200"
+                      disabled={isTestingKey}
+                      onClick={() => testApiKey(tempCustomApiKey || process.env.GEMINI_API_KEY || "")}
+                    >
+                      {isTestingKey && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                      Test Key Setup
+                    </Button>
+                  </div>
+                  {keyTestResult && (
+                    <div className={`text-xs p-2 rounded flex items-start gap-1.5 ${keyTestResult.success ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
+                      {keyTestResult.success ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                      )}
+                      <span>{keyTestResult.message}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex justify-end gap-3 border-t pt-4">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    setIsSettingsOpen(false);
+                    setKeyTestResult(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white" 
+                  size="sm"
+                  onClick={handleSaveSettings}
+                  disabled={!tempProjectName.trim()}
+                >
+                  Save Settings
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Add Lead Modal */}
       {isAddModalOpen && (
@@ -1559,7 +1774,7 @@ ${fewShotExamples}
                   <MessageCircle className="h-3 w-3" /> Custom WhatsApp Message (Optional)
                 </label>
                 <Input 
-                  placeholder="e.g. Hi {contact}, checking in from GINGER AI..." 
+                  placeholder={`e.g. Hi {contact}, checking in from ${projectName}...`} 
                   value={newLead.customWhatsappMessage}
                   onChange={(e) => setNewLead({...newLead, customWhatsappMessage: e.target.value})}
                   className="text-xs"
@@ -1665,14 +1880,15 @@ ${fewShotExamples}
                         onClick={async () => {
                           setIsImproving(true);
                           try {
-                            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+                            const ai = getGeminiClient();
                             const response = await ai.models.generateContent({
-                              model: "gemini-3-flash-preview",
+                              model: "gemini-3.5-flash",
                               contents: `Improve this email content while keeping the placeholders {salutation}, {contact}, {company}, {location}, {volume}, and {sender_name}. Make it more persuasive and professional. Return HTML format: \n\n ${emailTemplate}`,
                             });
                             setEmailTemplate(response.text);
-                          } catch (error) {
+                          } catch (error: any) {
                             console.error("Failed to improve email:", error);
+                            alert("Failed to improve email: " + (error.message || "Unknown error. Please check your Gemini API Key in settings."));
                           } finally {
                             setIsImproving(false);
                           }
@@ -1686,12 +1902,17 @@ ${fewShotExamples}
                         size="sm" 
                         className="h-7 text-[10px] text-purple-600 hover:text-purple-700 hover:bg-purple-50"
                         onClick={async () => {
-                          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-                          const response = await ai.models.generateContent({
-                            model: "gemini-3-flash-preview",
-                            contents: "Write a professional, persuasive email template for selling premium ginger to international buyers. Use placeholders like {salutation}, {contact}, {company}, {location}, {volume}, and {sender_name}. Keep it concise but formal. Return HTML format with basic tags like <p>, <br>, <strong>, <em>.",
-                          });
-                          setEmailTemplate(response.text);
+                          try {
+                            const ai = getGeminiClient();
+                            const response = await ai.models.generateContent({
+                              model: "gemini-3.5-flash",
+                              contents: "Write a professional, persuasive email template for selling premium ginger to international buyers. Use placeholders like {salutation}, {contact}, {company}, {location}, {volume}, and {sender_name}. Keep it concise but formal. Return HTML format with basic tags like <p>, <br>, <strong>, <em>.",
+                            });
+                            setEmailTemplate(response.text);
+                          } catch (error: any) {
+                            console.error("Failed to generate template:", error);
+                            alert("Failed to generate template: " + (error.message || "Unknown error. Please check your Gemini API Key in settings."));
+                          }
                         }}
                       >
                         <Sparkles className="h-3 w-3 mr-1" /> AI Generate Template
@@ -1883,7 +2104,7 @@ ${fewShotExamples}
                       onClick={() => {
                         navigator.clipboard.writeText(stripHtml(generatedFollowUp));
                         // In a real app, we'd open the email client or send via API
-                        const mailto = `mailto:${selectedLeadForFollowUp?.email}?subject=Follow-up from GINGER AI&body=${encodeURIComponent(stripHtml(generatedFollowUp))}`;
+                        const mailto = `mailto:${selectedLeadForFollowUp?.email}?subject=Follow-up from ${projectName}&body=${encodeURIComponent(stripHtml(generatedFollowUp))}`;
                         window.location.href = mailto;
                       }}
                     >
@@ -2225,7 +2446,7 @@ ${fewShotExamples}
                     size="sm" 
                     variant="ghost" 
                     className="h-8 text-[10px] text-emerald-700 hover:bg-emerald-100"
-                    onClick={() => setWhatsappTemplate("Hello {contact} from {company}, I'm contacting you from GINGER AI regarding ginger commodities.")}
+                    onClick={() => setWhatsappTemplate(`Hello {contact} from {company}, I'm contacting you from ${projectName} regarding ginger commodities.`)}
                   >
                     Default
                   </Button>
